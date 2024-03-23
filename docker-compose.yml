@@ -1,0 +1,88 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.4
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "22181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.4
+    depends_on:
+      - zookeeper
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  redis:
+    image: redis:latest
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_PORT=6379
+      - REDIS_DATABASES=16
+
+
+  binance_wsprovider:
+    build:
+      context: ./producer/binance
+      dockerfile: Dockerfile
+    command: [ "python", "binance_wsprovider.py" ]
+    restart: unless-stopped
+    volumes:
+      - ./simple_trading_config.py:/app/simple_trading_config.py:ro  # Mount config file in read-only mode
+    depends_on:
+      - kafka
+
+  postgres_writer:
+    build:
+      context: consumer/postgres_writer
+      dockerfile: Dockerfile
+    command: [ "python", "postgres_writer.py" ]
+    restart: unless-stopped
+    volumes:
+      - ./simple_trading_config.py:/app/simple_trading_config.py:ro  # Mount config file in read-only mode
+    depends_on:
+      - kafka
+      - postgres
+
+  trade_consumer:
+    build:
+      context: consumer/trade_consumer
+      dockerfile: Dockerfile
+    command: [ "python", "trade_consumer.py" ]
+    restart: unless-stopped
+    volumes:
+      - ./simple_trading_config.py:/app/simple_trading_config.py:ro  # Mount config file in read-only mode
+    depends_on:
+      - kafka
+      - redis
+
+  trade_order:
+    build:
+      context: consumer/trade_order
+      dockerfile: Dockerfile
+    command: [ "python", "trade_order.py" ]
+    restart: unless-stopped
+    volumes:
+      - ./simple_trading_config.py:/app/simple_trading_config.py:ro  # Mount config file in read-only mode
+    depends_on:
+      - trade_consumer
